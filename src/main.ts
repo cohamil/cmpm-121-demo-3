@@ -78,7 +78,9 @@ const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!; // 
 const defaultText = "No coins yet...";
 statusPanel.innerHTML = defaultText;
 
-const caches = new Map<Cell, Cache>();
+// Initialize cache maps
+const caches = new Map<string, string>();
+const cacheMarkers = new Map<string, leaflet.Rectangle>();
 
 // Look around the player's neighborhood for caches to spawn
 for (const cell of getVisibleCells(playerLocation)) {
@@ -88,7 +90,73 @@ for (const cell of getVisibleCells(playerLocation)) {
   }
 }
 
+// ------------------------------ Event Listeners ------------------------------
+
+document.querySelector<HTMLButtonElement>("#north")!
+  .addEventListener("click", () => {
+    const newPos = {
+      i: playerLocation.lat + TILE_DEGREES,
+      j: playerLocation.lng,
+    };
+    movePlayer(newPos);
+  });
+
+document.querySelector<HTMLButtonElement>("#south")!
+  .addEventListener("click", () => {
+    const newPos = {
+      i: playerLocation.lat - TILE_DEGREES,
+      j: playerLocation.lng,
+    };
+    movePlayer(newPos);
+  });
+
+document.querySelector<HTMLButtonElement>("#west")!
+  .addEventListener("click", () => {
+    const newPos = {
+      i: playerLocation.lat,
+      j: playerLocation.lng - TILE_DEGREES,
+    };
+    movePlayer(newPos);
+  });
+
+document.querySelector<HTMLButtonElement>("#east")!
+  .addEventListener("click", () => {
+    const newPos = {
+      i: playerLocation.lat,
+      j: playerLocation.lng + TILE_DEGREES,
+    };
+    movePlayer(newPos);
+  });
+
 // --------------------------------- Functions ---------------------------------
+
+// Move the player to a new location
+function movePlayer(newPos: { i: number; j: number }) {
+  // Update the player's location
+  playerLocation.lat = newPos.i;
+  playerLocation.lng = newPos.j;
+  playerMarker.setLatLng(playerLocation);
+
+  // Update the map view
+  map.panTo(playerLocation);
+
+  updateCaches();
+}
+
+// String representation of a cell
+function cellToString(cell: Cell): string {
+  return [cell.i, cell.j].toString();
+}
+
+// Save the state of a cache
+function toMomento(cache: Cache): string {
+  return JSON.stringify(cache);
+}
+
+// Restore the state of a cache
+function fromMomento(momento: string): Cache {
+  return JSON.parse(momento);
+}
 
 // Get the surrounding cells of a given coordinate
 function getVisibleCells(coord: { lat: number; lng: number }): Cell[] {
@@ -113,14 +181,50 @@ function getVisibleCells(coord: { lat: number; lng: number }): Cell[] {
   return visibleCells;
 }
 
+// Update the caches on the map
+function updateCaches() {
+  const visibleCellsSet = new Set<string>();
+  const newCells: Cell[] = [];
+
+  // Convert visible cells to a hashable string for comparison
+  const visibleCells = getVisibleCells(playerLocation);
+  visibleCells.forEach((cell) => visibleCellsSet.add(cellToString(cell)));
+
+  // Iterate through the current markers to find which should be despawned
+  cacheMarkers.forEach((marker, cellString) => {
+    if (!visibleCellsSet.has(cellString)) {
+      marker.remove();
+      cacheMarkers.delete(cellString);
+    }
+  });
+
+  // Determine which cells are new and should have caches spawned
+  visibleCells.forEach((cell) => {
+    if (
+      !cacheMarkers.has(cellToString(cell)) &&
+      luck([cell.i, cell.j].toString()) < CACHE_SPAWN_PROBABILITY
+    ) {
+      newCells.push(cell);
+    }
+  });
+
+  // Spawn new caches
+  for (const cell of newCells) {
+    spawnCache(cell);
+  }
+}
+
 // Add caches to the map by cell numbers
 function spawnCache(cell: Cell) {
   // Generate the cache if it doesn't exist
-  let cache = caches.get(cell);
-  if (cache === undefined) {
+  const cellString = cellToString(cell);
+  let cache: Cache;
+  if (!caches.get(cellString)) {
     cache = { cell, coins: [] };
     generateCoins(cell, cache!);
-    caches.set(cell, cache!);
+    caches.set(cellString, toMomento(cache));
+  } else {
+    cache = fromMomento(caches.get(cellString)!);
   }
 
   // Convert cell numbers into lat/lng bounds
@@ -142,6 +246,9 @@ function spawnCache(cell: Cell) {
     const popupDiv = document.createElement("div");
     return updateCachePopup(popupDiv, cache!);
   }, { keepInView: true });
+
+  // Save the cache marker
+  cacheMarkers.set(cellToString(cell), rect);
 }
 
 // Generate coins for a cache
@@ -161,6 +268,7 @@ function collect(coin: Coin, cache: Cache) {
   playerInventory.push(coin);
   const index = cache.coins.indexOf(coin);
   if (index > -1) cache.coins.splice(index, 1);
+  caches.set(cellToString(cache.cell), toMomento(cache));
   displayInventory();
 }
 
@@ -170,6 +278,7 @@ function deposit(cache: Cache) {
     const coin = playerInventory.pop();
     cache.coins.push(coin!);
   }
+  caches.set(cellToString(cache.cell), toMomento(cache));
   displayInventory();
 }
 
