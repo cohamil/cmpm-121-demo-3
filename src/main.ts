@@ -1,5 +1,6 @@
 // @deno-types="npm:@types/leaflet@^1.9.14"
 import leaflet from "leaflet";
+import { Polyline } from "leaflet";
 
 // Style sheets
 import "leaflet/dist/leaflet.css";
@@ -17,7 +18,14 @@ const APP_NAME = "Geocoin Carrier";
 document.title = APP_NAME;
 
 // Player variables
-const playerLocation = leaflet.latLng(36.98949379578401, -122.06277128548504);
+const initialPlayerLocation = leaflet.latLng(
+  36.98949379578401,
+  -122.06277128548504,
+);
+const playerLocation = leaflet.latLng(
+  initialPlayerLocation.lat,
+  initialPlayerLocation.lng,
+);
 const playerInventory: Coin[] = [];
 
 // Tunable gameplay parameters
@@ -73,22 +81,21 @@ const playerMarker = leaflet.marker(playerLocation);
 playerMarker.bindTooltip("Your current location.");
 playerMarker.addTo(map);
 
+// Add a polyline to represent the player's movement history
+const playerMovementHistory: Polyline = leaflet.polyline([]);
+playerMovementHistory.addTo(map);
+
 // Display the player's inventory using the status panel
 const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!; // element `statusPanel` is defined in index.html
-const defaultText = "No coins yet...";
-statusPanel.innerHTML = defaultText;
+//const defaultText = "No coins yet...";
+const defaultText = "";
 
 // Initialize cache maps
 const caches = new Map<string, string>();
 const cacheMarkers = new Map<string, leaflet.Rectangle>();
 
-// Look around the player's neighborhood for caches to spawn
-for (const cell of getVisibleCells(playerLocation)) {
-  // If location i,j is lucky enough, spawn a cache!
-  if (luck([cell.i, cell.j].toString()) < CACHE_SPAWN_PROBABILITY) {
-    spawnCache(cell);
-  }
-}
+// Initialize the game
+initGame();
 
 // ------------------------------ Event Listeners ------------------------------
 
@@ -128,7 +135,116 @@ document.querySelector<HTMLButtonElement>("#east")!
     movePlayer(newPos);
   });
 
+document.querySelector<HTMLButtonElement>("#sensor")!
+  .addEventListener("click", () => {
+    // Get the current location of the player
+    navigator.geolocation.getCurrentPosition((position) => {
+      const newPos = {
+        i: position.coords.latitude,
+        j: position.coords.longitude,
+      };
+      movePlayer(newPos);
+    });
+  });
+
+document.querySelector<HTMLButtonElement>("#reset")!
+  .addEventListener("click", () => {
+    // Prompt the player to confirm the reset
+    if (!confirm("Reset the game?")) return;
+
+    // Clear the local storage
+    localStorage.clear();
+    // Return all coins to their home caches
+    initGame();
+  });
+
 // --------------------------------- Functions ---------------------------------
+
+// Initialize the game
+function initGame() {
+  // Create the map
+  map.setView(initialPlayerLocation, GAMEPLAY_ZOOM_LEVEL);
+
+  // Initialize player data
+  playerMarker.setLatLng(initialPlayerLocation);
+  playerMarker.addTo(map);
+  playerInventory.splice(0, playerInventory.length);
+  playerLocation.lat = initialPlayerLocation.lat;
+  playerLocation.lng = initialPlayerLocation.lng;
+
+  // Clear the player's movement history
+  playerMovementHistory.setLatLngs([]);
+  playerMovementHistory.addLatLng(initialPlayerLocation);
+
+  // Initialize the cache maps
+  caches.clear();
+  if (cacheMarkers.size > 0) {
+    cacheMarkers.forEach((marker, _cellString) => {
+      marker.remove();
+    });
+  }
+  cacheMarkers.clear();
+
+  // Load local storage data
+  loadLocalStorage();
+  map.panTo(playerLocation);
+
+  updateCaches();
+  displayInventory();
+}
+
+// Local data storage functions
+
+// Save cache data to local storage
+function saveCaches() {
+  localStorage.setItem("caches", JSON.stringify(Array.from(caches.entries())));
+}
+
+// Save inventory data to local storage
+function saveInventory() {
+  localStorage.setItem("inventory", JSON.stringify(playerInventory));
+}
+
+// Save player location to local storage
+function savePlayerLocation() {
+  localStorage.setItem(
+    "playerLocation",
+    JSON.stringify(playerMovementHistory.getLatLngs()),
+  );
+}
+
+// Load data from local storage
+function loadLocalStorage() {
+  // Load caches from local storage
+  const cacheData = localStorage.getItem("caches");
+  if (cacheData) {
+    const cacheArray = JSON.parse(cacheData);
+    cacheArray.forEach((cache: [string, string]) => {
+      caches.set(cache[0], cache[1]);
+    });
+  }
+
+  // Load inventory from local storage
+  const inventoryData = localStorage.getItem("inventory");
+  if (inventoryData) {
+    const inventoryArray = JSON.parse(inventoryData);
+    inventoryArray.forEach((coin: Coin) => {
+      playerInventory.push(coin);
+    });
+  }
+
+  // Load player location from local storage
+  const playerLocationData = localStorage.getItem("playerLocation");
+  if (playerLocationData) {
+    const playerLocationArray = JSON.parse(playerLocationData);
+    playerMovementHistory.setLatLngs(playerLocationArray);
+    playerLocation.lat =
+      playerLocationArray[playerLocationArray.length - 1].lat;
+    playerLocation.lng =
+      playerLocationArray[playerLocationArray.length - 1].lng;
+    playerMarker.setLatLng(playerLocation);
+  }
+}
 
 // Move the player to a new location
 function movePlayer(newPos: { i: number; j: number }) {
@@ -136,6 +252,11 @@ function movePlayer(newPos: { i: number; j: number }) {
   playerLocation.lat = newPos.i;
   playerLocation.lng = newPos.j;
   playerMarker.setLatLng(playerLocation);
+
+  // Update the player's movement history
+  const newLatLng = leaflet.latLng(newPos.i, newPos.j);
+  playerMovementHistory.addLatLng(newLatLng);
+  savePlayerLocation();
 
   // Update the map view
   map.panTo(playerLocation);
@@ -247,6 +368,9 @@ function spawnCache(cell: Cell) {
     return updateCachePopup(popupDiv, cache!);
   }, { keepInView: true });
 
+  // Save the caches to local storage
+  saveCaches();
+
   // Save the cache marker
   cacheMarkers.set(cellToString(cell), rect);
 }
@@ -269,6 +393,8 @@ function collect(coin: Coin, cache: Cache) {
   const index = cache.coins.indexOf(coin);
   if (index > -1) cache.coins.splice(index, 1);
   caches.set(cellToString(cache.cell), toMomento(cache));
+  // Save the caches to local storage
+  saveCaches();
   displayInventory();
 }
 
@@ -279,19 +405,49 @@ function deposit(cache: Cache) {
     cache.coins.push(coin!);
   }
   caches.set(cellToString(cache.cell), toMomento(cache));
+  // Save the caches to local storage
+  saveCaches();
   displayInventory();
 }
 
 // Update the status panel with the player's inventory
 function displayInventory() {
-  let text = "";
+  const inventoryDiv = document.createElement("div");
+
   if (playerInventory.length > 0) {
     // Display the player's inventory in status panel
     for (const coin of playerInventory) {
-      text += `<ul><li>${coin.cell.i}:${coin.cell.j}#${coin.serial}</li></ul>`;
+      inventoryDiv.innerHTML = `
+                <ul><li>${coin.cell.i}:${coin.cell.j}#${coin.serial}</li></ul>`;
+
+      const centerButton = document.createElement("button");
+      centerButton.textContent = "Center to Home Cache";
+      centerButton.addEventListener("click", () => {
+        // Open the cache popup
+        const cache = fromMomento(caches.get(cellToString(coin.cell))!);
+        const popupDiv = document.createElement("div");
+        updateCachePopup(popupDiv, cache);
+
+        // Create the cache marker if it's been despawned
+        const cacheMarker = cacheMarkers.get(cellToString(coin.cell));
+        if (!cacheMarker) spawnCache(coin.cell);
+        cacheMarkers.get(cellToString(coin.cell))!.openPopup();
+
+        map.panTo(
+          leaflet.latLng(
+            coin.cell.i * TILE_DEGREES,
+            coin.cell.j * TILE_DEGREES,
+          ),
+        );
+      });
+
+      inventoryDiv.appendChild(centerButton);
+      statusPanel.appendChild(inventoryDiv);
     }
-  } else text = defaultText;
-  statusPanel.innerHTML = text;
+  } else statusPanel.innerHTML = defaultText;
+
+  // Save the inventory to local storage
+  saveInventory();
 }
 
 // Update the cache popup with the current cache contents
