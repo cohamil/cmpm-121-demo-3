@@ -166,17 +166,38 @@ function initGame() {
   map.setView(initialPlayerLocation, GAMEPLAY_ZOOM_LEVEL);
 
   // Initialize player data
+  initializeUI();
+
+  // Clear the player's movement history
+  resetPlayerState(initialPlayerLocation);
+
+  // Initialize the cache maps
+  resetCaches();
+
+  // Load local storage data
+  loadDataFromLocalStorage();
+
+  updateCaches();
+  displayInventory();
+}
+
+// Initialize player data
+function initializeUI() {
   playerMarker.setLatLng(initialPlayerLocation);
   playerMarker.addTo(map);
   playerInventory.splice(0, playerInventory.length);
   playerLocation.lat = initialPlayerLocation.lat;
   playerLocation.lng = initialPlayerLocation.lng;
+}
 
-  // Clear the player's movement history
+// Clear the player's movement history
+function resetPlayerState(startLocation: leaflet.LatLng) {
   playerMovementHistory.setLatLngs([]);
-  playerMovementHistory.addLatLng(initialPlayerLocation);
+  playerMovementHistory.addLatLng(startLocation);
+}
 
-  // Initialize the cache maps
+// Initialize the cache maps
+function resetCaches() {
   caches.clear();
   if (cacheMarkers.size > 0) {
     cacheMarkers.forEach((marker, _cellString) => {
@@ -184,13 +205,12 @@ function initGame() {
     });
   }
   cacheMarkers.clear();
+}
 
-  // Load local storage data
+// Load local storage data
+function loadDataFromLocalStorage() {
   loadLocalStorage();
   map.panTo(playerLocation);
-
-  updateCaches();
-  displayInventory();
 }
 
 // Local data storage functions
